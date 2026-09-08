@@ -1,0 +1,10 @@
+model: cl-nagoya/ruri-v3-130m
+chunk_chars: 1800
+overlap_chars: 300
+min_candidate_score: 4.0
+head_chars: 8000
+pca_components: 50
+umap_neighbors: 30
+umap_min_dist: 0.05
+hdbscan_min_cluster_size: 20
+random_state: 42
