@@ -1,6 +1,7 @@
 model: cl-nagoya/ruri-v3-130m
 chunk_chars: 1800
 overlap_chars: 300
+max_chunks_per_work: 40
 min_candidate_score: 4.0
 head_chars: 8000
 pca_components: 50
