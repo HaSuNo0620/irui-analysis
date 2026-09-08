@@ -1,0 +1,78 @@
+name: Irui pilot analysis
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - analysis-pipeline
+    paths:
+      - 'run_all.py'
+      - 'fetch_hf_candidates.py'
+      - 'config.yaml'
+      - 'requirements.txt'
+      - '.github/workflows/pilot.yml'
+
+jobs:
+  pilot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      TOKENIZERS_PARALLELISM: 'false'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Cache Hugging Face models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ runner.os }}-ruri-v3-130m
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check Hugging Face token
+        run: |
+          if [ -z "$HF_TOKEN" ]; then
+            echo "HF_TOKEN repository secret is missing."
+            exit 2
+          fi
+
+      - name: Stream pilot candidates
+        run: |
+          python fetch_hf_candidates.py \
+            --max-rows 20000 \
+            --max-candidates 100 \
+            --output data/pilot_candidates.jsonl
+
+      - name: Run unsupervised pilot
+        run: |
+          python run_all.py \
+            --input 'data/pilot_candidates.jsonl' \
+            --device cpu
+
+      - name: Write run manifest
+        if: always()
+        run: |
+          mkdir -p results
+          {
+            echo "commit=${GITHUB_SHA}"
+            echo "run_id=${GITHUB_RUN_ID}"
+            echo "date=$(date -u +%FT%TZ)"
+          } > results/run_manifest.txt
+
+      - name: Upload analysis results only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: irui-pilot-results
+          path: results/
+          if-no-files-found: warn
+          retention-days: 30
