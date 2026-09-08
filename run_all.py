@@ -64,9 +64,35 @@ def chunk_text(text, size, overlap):
     return chunks
 
 
+def subsample_chunks_evenly(chunks, max_chunks):
+    """Keep an approximately uniform set across narrative position for bounded pilots."""
+    if not max_chunks or len(chunks) <= max_chunks:
+        return chunks
+    idx=np.linspace(0, len(chunks)-1, num=max_chunks, dtype=int)
+    idx=np.unique(idx)
+    return [chunks[int(i)] for i in idx]
+
+
 def stable_id(path, idx, meta):
     raw=f"{path}:{idx}:"+json.dumps(meta,ensure_ascii=False,sort_keys=True)
     return hashlib.sha1(raw.encode()).hexdigest()[:16]
+
+
+def pick_meta(meta, needles):
+    if not isinstance(meta, dict):
+        return ""
+    flat=[]
+    def walk(obj, key=""):
+        if isinstance(obj, dict):
+            for k,v in obj.items(): walk(v, f"{key}.{k}" if key else str(k))
+        elif isinstance(obj, (str,int,float,bool)):
+            flat.append((key.lower(), str(obj)))
+    walk(meta)
+    for needle in needles:
+        for k,v in flat:
+            if needle in k:
+                return v
+    return ""
 
 
 def main():
@@ -89,38 +115,50 @@ def main():
         score, nh, rel=score_candidate(meta_text,head)
         if score < cfg["min_candidate_score"]: continue
         cid=stable_id(path,idx,meta)
-        candidates.append({"candidate_id":cid,"source_file":path,"row_idx":idx,"score":score,
-                           "retrieval_nonhuman_hits":"|".join(sorted(nh)),
-                           "retrieval_relation_hits":"|".join(sorted(rel)),
-                           "text_chars":len(text),"meta_json":json.dumps(meta,ensure_ascii=False)})
+        candidates.append({
+            "candidate_id":cid,"source_file":path,"row_idx":idx,"score":score,
+            "title":pick_meta(meta,["title","name"]),
+            "date_raw":pick_meta(meta,["firstup","publish","date","created"]),
+            "retrieval_nonhuman_hits":"|".join(sorted(nh)),
+            "retrieval_relation_hits":"|".join(sorted(rel)),
+            "text_chars":len(text),"meta_json":json.dumps(meta,ensure_ascii=False)
+        })
         texts[cid]=text
     cdf=pd.DataFrame(candidates)
     cdf.to_csv(out/"candidates.csv",index=False)
     if cdf.empty: raise SystemExit("No candidates. Lower min_candidate_score or inspect corpus schema.")
 
-    # Stage 2: chunk + unlabeled embeddings
+    # Stage 2: chunk + unlabeled embeddings. For the pilot, sample chunks evenly over the work.
     model=SentenceTransformer(cfg["model"], device=args.device)
     manifest=[]; vecs=[]
+    max_chunks=cfg.get("max_chunks_per_work",0)
     for row in candidates:
         cid=row["candidate_id"]; text=texts[cid]
         chunks=chunk_text(text,cfg["chunk_chars"],cfg["overlap_chars"])
+        chunks=subsample_chunks_evenly(chunks,max_chunks)
         batch=["トピック: "+c for _,_,c in chunks]
         if not batch: continue
         emb=model.encode(batch,normalize_embeddings=True,batch_size=16,show_progress_bar=False)
         for j,((st,en,_),v) in enumerate(zip(chunks,emb)):
             vecs.append(v.astype(np.float32))
-            manifest.append({"candidate_id":cid,"chunk_idx":j,"start_char":st,"end_char":en,
-                             "position":((st+en)/2)/max(len(text),1)})
+            manifest.append({
+                "candidate_id":cid,"title":row.get("title",""),"date_raw":row.get("date_raw",""),
+                "chunk_idx":j,"start_char":st,"end_char":en,
+                "position":((st+en)/2)/max(len(text),1)
+            })
+    if not vecs:
+        raise SystemExit("No chunks were generated from selected candidates.")
     X=np.stack(vecs)
     np.save(out/"embeddings.npy",X)
     mdf=pd.DataFrame(manifest); mdf.to_csv(out/"chunk_manifest.csv",index=False)
 
-    # Stage 3: unsupervised structure
+    # Stage 3: unsupervised structure.
     ncomp=min(cfg["pca_components"], X.shape[1], max(2,X.shape[0]-1))
     Xp=PCA(n_components=ncomp, random_state=cfg["random_state"]).fit_transform(X)
-    Xu=umap.UMAP(n_components=2,n_neighbors=cfg["umap_neighbors"],min_dist=cfg["umap_min_dist"],
-                 metric="cosine",random_state=cfg["random_state"]).fit_transform(Xp)
-    labels=hdbscan.HDBSCAN(min_cluster_size=cfg["hdbscan_min_cluster_size"]).fit_predict(Xp)
+    Xu=umap.UMAP(n_components=2,n_neighbors=min(cfg["umap_neighbors"], max(2, len(X)-1)),
+                 min_dist=cfg["umap_min_dist"],metric="cosine",
+                 random_state=cfg["random_state"]).fit_transform(Xp)
+    labels=hdbscan.HDBSCAN(min_cluster_size=min(cfg["hdbscan_min_cluster_size"], max(2, len(X)//5))).fit_predict(Xp)
 
     res=mdf.copy(); res["umap_x"]=Xu[:,0]; res["umap_y"]=Xu[:,1]; res["cluster"]=labels
     res.to_csv(out/"clusters.csv",index=False)
@@ -128,7 +166,7 @@ def main():
     summary.to_csv(out/"cluster_summary.csv",index=False)
 
     plt.figure(figsize=(9,7))
-    plt.scatter(res.umap_x,res.umap_y,s=5,alpha=.5,c=res.cluster)
+    plt.scatter(res.umap_x,res.umap_y,s=6,alpha=.55,c=res.cluster)
     plt.xlabel("UMAP-1"); plt.ylabel("UMAP-2"); plt.title("Unsupervised semantic map of candidate text chunks")
     plt.tight_layout(); plt.savefig(out/"umap.png",dpi=180); plt.close()
 
