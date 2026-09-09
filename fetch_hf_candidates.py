@@ -4,8 +4,9 @@
 """Stream a bounded pilot sample from WebNovels-Ja and save candidate rows locally.
 
 Retrieval is deliberately high-recall, but requires a nonhuman term and an intimate-
-relationship term to occur near each other. Retrieval labels are never used as
-clustering features.
+relationship term to occur near each other. By default, rows explicitly marked as
+non-original in dataset metadata are excluded before lexical retrieval. Retrieval labels
+are never used as clustering features.
 """
 
 import argparse
@@ -82,7 +83,6 @@ def score_candidate(meta_text, head, proximity_window=500):
     relm = term_hits(meta_text, RELATION_TERMS)
     nhp, relp, pairs = proximity_hits(head, proximity_window)
 
-    # Metadata co-occurrence is strong evidence; otherwise require local textual co-occurrence.
     meta_pair = bool(nhm and relm)
     text_pair = bool(nhp and relp)
     if not (meta_pair or text_pair):
@@ -95,6 +95,20 @@ def score_candidate(meta_text, head, proximity_window=500):
         score += 1.5 + 0.75 * min(len(nhp), 4) + 0.75 * min(len(relp), 4)
         score += 0.25 * min(pairs, 4)
     return score
+
+
+def is_original(meta):
+    """Return True only for rows explicitly marked original by the source metadata."""
+    if not isinstance(meta, dict):
+        return False
+    value = meta.get("isoriginal", None)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return int(value) == 1
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes"}
+    return False
 
 
 def main():
@@ -110,6 +124,8 @@ def main():
     ap.add_argument("--proximity-window", type=int, default=500)
     ap.add_argument("--shuffle-buffer", type=int, default=20000)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--include-non-original", action="store_true",
+                    help="Include rows with isoriginal != 1. Default excludes them.")
     args = ap.parse_args()
 
     token = os.environ.get("HF_TOKEN")
@@ -126,6 +142,7 @@ def main():
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     scanned = 0
+    original_rows = 0
     selected = 0
 
     with out.open("w", encoding="utf-8") as f:
@@ -133,10 +150,16 @@ def main():
             scanned += 1
             text = row.get("text", "") or ""
             meta = row.get("meta", {}) or {}
+
+            if not args.include_non_original and not is_original(meta):
+                if scanned >= args.max_rows:
+                    break
+                continue
+            original_rows += 1
+
             meta_text = " ".join(flatten_strings(meta))
             score = score_candidate(meta_text, text[:args.head_chars], args.proximity_window)
             if score >= args.min_score:
-                # Local handoff only; candidate text is never uploaded as an artifact.
                 f.write(json.dumps({"text": text, "meta": meta}, ensure_ascii=False) + "\n")
                 selected += 1
                 if selected >= args.max_candidates:
@@ -145,6 +168,7 @@ def main():
                 break
 
     print(f"scanned={scanned}")
+    print(f"original_rows={original_rows}")
     print(f"selected={selected}")
     print(f"output={out}")
     if selected < 10:
