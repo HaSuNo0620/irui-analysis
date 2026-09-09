@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""Stream a bounded pilot sample from WebNovels-Ja and save candidate rows locally.
+"""Stream a bounded sample from WebNovels-Ja and save candidate rows locally.
 
-Retrieval is deliberately high-recall, but requires a nonhuman term and an intimate-
-relationship term to occur near each other. By default, rows explicitly marked as
-non-original in dataset metadata are excluded before lexical retrieval. Retrieval labels
-are never used as clustering features.
+By default the analysis population is restricted to rows explicitly marked as original
+(`isoriginal=1`) before randomization and lexical retrieval. Qualifying works are then
+sampled with reservoir sampling, so the output is not the first N matches in storage
+order. Retrieval labels are never used as clustering features.
 """
 
 import argparse
 import json
 import os
+import random
 from pathlib import Path
 
 from datasets import load_dataset
@@ -111,13 +112,18 @@ def is_original(meta):
     return False
 
 
+def row_is_original(row):
+    return is_original((row or {}).get("meta", {}) or {})
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", default="OmniAICreator/WebNovels-Ja")
     ap.add_argument("--config", default=None)
     ap.add_argument("--split", default="train")
     ap.add_argument("--output", default="data/pilot_candidates.jsonl")
-    ap.add_argument("--max-rows", type=int, default=50000)
+    ap.add_argument("--max-rows", type=int, default=50000,
+                    help="Maximum rows in the selected population to inspect (original rows by default).")
     ap.add_argument("--max-candidates", type=int, default=100)
     ap.add_argument("--head-chars", type=int, default=12000)
     ap.add_argument("--min-score", type=float, default=3.5)
@@ -125,7 +131,7 @@ def main():
     ap.add_argument("--shuffle-buffer", type=int, default=20000)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--include-non-original", action="store_true",
-                    help="Include rows with isoriginal != 1. Default excludes them.")
+                    help="Use all rows instead of restricting the population to isoriginal=1.")
     args = ap.parse_args()
 
     token = os.environ.get("HF_TOKEN")
@@ -136,42 +142,62 @@ def main():
     if args.config:
         kwargs["name"] = args.config
     ds = load_dataset(**kwargs)
+
+    # Define the sampling population first. With the default settings, every downstream
+    # operation sees original works only. The filter is lazy for the streaming dataset.
+    if not args.include_non_original:
+        ds = ds.filter(row_is_original)
+
+    # Shuffle *within the selected population*. Reservoir sampling below is still the
+    # mechanism that makes the final candidate sample uniform among qualifying rows.
     if args.shuffle_buffer > 0:
         ds = ds.shuffle(seed=args.seed, buffer_size=args.shuffle_buffer)
 
+    rng = random.Random(args.seed)
+    reservoir = []
+    population_rows = 0
+    qualifying_rows = 0
+
+    for row in ds:
+        if population_rows >= args.max_rows:
+            break
+        population_rows += 1
+
+        text = row.get("text", "") or ""
+        meta = row.get("meta", {}) or {}
+        meta_text = " ".join(flatten_strings(meta))
+        score = score_candidate(meta_text, text[:args.head_chars], args.proximity_window)
+        if score < args.min_score:
+            continue
+
+        qualifying_rows += 1
+        item = {"text": text, "meta": meta}
+        if len(reservoir) < args.max_candidates:
+            reservoir.append(item)
+        else:
+            # Algorithm R: after q qualifying rows, every qualifying row has probability
+            # max_candidates/q of being represented in the final reservoir.
+            j = rng.randrange(qualifying_rows)
+            if j < args.max_candidates:
+                reservoir[j] = item
+
+    # Randomize output order independently of stream/storage position.
+    rng.shuffle(reservoir)
+
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
-    scanned = 0
-    original_rows = 0
-    selected = 0
-
     with out.open("w", encoding="utf-8") as f:
-        for row in ds:
-            scanned += 1
-            text = row.get("text", "") or ""
-            meta = row.get("meta", {}) or {}
+        for item in reservoir:
+            f.write(json.dumps(item, ensure_ascii=False) + "\n")
 
-            if not args.include_non_original and not is_original(meta):
-                if scanned >= args.max_rows:
-                    break
-                continue
-            original_rows += 1
-
-            meta_text = " ".join(flatten_strings(meta))
-            score = score_candidate(meta_text, text[:args.head_chars], args.proximity_window)
-            if score >= args.min_score:
-                f.write(json.dumps({"text": text, "meta": meta}, ensure_ascii=False) + "\n")
-                selected += 1
-                if selected >= args.max_candidates:
-                    break
-            if scanned >= args.max_rows:
-                break
-
-    print(f"scanned={scanned}")
-    print(f"original_rows={original_rows}")
-    print(f"selected={selected}")
+    print(f"population={'all' if args.include_non_original else 'original_only'}")
+    print(f"population_rows_scanned={population_rows}")
+    print(f"qualifying_rows={qualifying_rows}")
+    print(f"selected={len(reservoir)}")
+    print(f"sampling=reservoir")
+    print(f"seed={args.seed}")
     print(f"output={out}")
-    if selected < 10:
+    if len(reservoir) < 10:
         print("WARNING: very few candidates; broaden max_rows before relaxing proximity filtering.")
 
 
