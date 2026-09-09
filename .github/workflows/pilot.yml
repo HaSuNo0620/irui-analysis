@@ -8,6 +8,7 @@ on:
     paths:
       - 'run_all.py'
       - 'fetch_hf_candidates.py'
+      - 'diagnose_clusters.py'
       - 'config.yaml'
       - 'requirements.txt'
       - '.github/workflows/pilot.yml'
@@ -60,6 +61,9 @@ jobs:
           python run_all.py \
             --input 'data/pilot_candidates.jsonl' \
             --device cpu
+
+      - name: Diagnose HDBSCAN stability
+        run: python diagnose_clusters.py
 
       - name: Write run manifest
         if: always()
