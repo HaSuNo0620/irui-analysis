@@ -13,7 +13,7 @@ import umap
 import hdbscan
 import matplotlib.pyplot as plt
 
-from event_windows import lexical_hits, extract_relation_event_windows, anonymize_proper_nouns
+from event_windows import lexical_hits, extract_followup_relation_windows, anonymize_proper_nouns
 
 
 def flatten_strings(obj):
@@ -60,7 +60,7 @@ def pick_meta(meta, needles):
 
 def main():
     ap=argparse.ArgumentParser()
-    ap.add_argument("--input", required=True, help="Preselected candidate JSONL glob")
+    ap.add_argument("--input", required=True, help="Strictly preselected candidate JSONL glob")
     ap.add_argument("--config", default="config.yaml")
     ap.add_argument("--device", default=None)
     args=ap.parse_args()
@@ -93,20 +93,21 @@ def main():
 
     model=SentenceTransformer(cfg["model"], device=args.device)
     manifest=[]; vecs=[]
-    proximity=int(cfg.get("relation_event_proximity",500))
     window_chars=int(cfg.get("relation_event_window_chars",600))
     max_windows=int(cfg.get("max_event_windows_per_work",25))
-    max_sentences=int(cfg.get("relation_event_max_sentences",2))
+    followup_max_sentences=int(cfg.get("followup_event_max_sentences",4))
     works_with_events=0
 
     for row in candidates:
         cid=row["candidate_id"]; text=texts[cid]
-        windows=extract_relation_event_windows(
+        # Candidate membership was already established by the strict human+nonhuman+
+        # relation rule. Here we deliberately broaden within-work event collection so
+        # later mentions using names/pronouns are retained for trajectory analysis.
+        windows=extract_followup_relation_windows(
             text,
-            proximity=proximity,
             window_chars=window_chars,
             max_windows=max_windows,
-            max_sentences=max_sentences,
+            max_sentences=followup_max_sentences,
         )
         if not windows:
             continue
@@ -123,7 +124,7 @@ def main():
                 "event_chars":en-st,
             })
     if not vecs:
-        raise SystemExit("No explicit human-nonhuman relationship windows were generated from selected candidates.")
+        raise SystemExit("No follow-up relation-event windows were generated from selected candidates.")
 
     X=np.stack(vecs)
     np.save(out/"embeddings.npy",X)
@@ -150,12 +151,17 @@ def main():
     plt.figure(figsize=(9,7))
     plt.scatter(res.umap_x,res.umap_y,s=6,alpha=.55,c=res.cluster)
     plt.xlabel("UMAP-1"); plt.ylabel("UMAP-2")
-    plt.title("Anonymized explicit human-nonhuman relation-event map")
+    plt.title("Anonymized within-work human-nonhuman relation-event map")
     plt.tight_layout(); plt.savefig(out/"umap.png",dpi=180); plt.close()
 
+    per_work=pd.Series([m["candidate_id"] for m in manifest]).value_counts()
     print(f"Candidates: {len(cdf)}")
-    print(f"Works with explicit relation-event windows: {works_with_events}")
-    print(f"Explicit relation-event windows: {len(res)}")
+    print(f"Works with follow-up relation-event windows: {works_with_events}")
+    print(f"Follow-up relation-event windows: {len(res)}")
+    print(f"Mean windows per work: {per_work.mean():.3f}")
+    print(f"Median windows per work: {per_work.median():.1f}")
+    print(f"Works with >=5 windows: {(per_work>=5).sum()}")
+    print(f"Works with >=10 windows: {(per_work>=10).sum()}")
     print(f"Clusters (excluding noise): {len(set(labels)-{-1})}")
     print("Saved to results/")
 
