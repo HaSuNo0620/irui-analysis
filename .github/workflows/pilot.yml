@@ -9,6 +9,7 @@ on:
       - 'run_all.py'
       - 'fetch_hf_candidates.py'
       - 'diagnose_clusters.py'
+      - 'analyze_structure.py'
       - 'config.yaml'
       - 'requirements.txt'
       - '.github/workflows/pilot.yml'
@@ -64,6 +65,11 @@ jobs:
 
       - name: Diagnose HDBSCAN stability
         run: python diagnose_clusters.py
+
+      - name: Analyze cluster meaning and trajectories
+        run: |
+          python analyze_structure.py \
+            --input data/pilot_candidates.jsonl
 
       - name: Write run manifest
         if: always()
