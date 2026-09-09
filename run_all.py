@@ -45,13 +45,10 @@ def iter_jsonl(paths):
                 yield p, idx, obj
 
 
-def score_candidate(meta_text, head):
-    nhm={w for w in NONHUMAN_TERMS if w in meta_text}; relm={w for w in RELATION_TERMS if w in meta_text}
-    nhh={w for w in NONHUMAN_TERMS if w in head}; relh={w for w in RELATION_TERMS if w in head}
-    nh=nhm|nhh; rel=relm|relh
-    if not nh or not rel: return 0.0, nh, rel
-    score=2*min(len(nhm),3)+2*min(len(relm),3)+0.75*min(len(nhh),4)+0.75*min(len(relh),4)
-    return score, nh, rel
+def lexical_hits(meta_text, head):
+    nh={w for w in NONHUMAN_TERMS if w in meta_text or w in head}
+    rel={w for w in RELATION_TERMS if w in meta_text or w in head}
+    return nh, rel
 
 
 def chunk_text(text, size, overlap):
@@ -96,7 +93,7 @@ def pick_meta(meta, needles):
 
 def main():
     ap=argparse.ArgumentParser()
-    ap.add_argument("--input", required=True, help="JSONL glob, e.g. 'data/*.jsonl'")
+    ap.add_argument("--input", required=True, help="Preselected candidate JSONL glob")
     ap.add_argument("--config", default="config.yaml")
     ap.add_argument("--device", default=None)
     args=ap.parse_args()
@@ -106,15 +103,18 @@ def main():
     if not paths: raise SystemExit("No input files matched")
     out=Path("results"); out.mkdir(exist_ok=True)
 
+    # The input JSONL is already selected by fetch_hf_candidates.py. Do not apply a second
+    # incompatible retrieval filter here; lexical hits are retained only for auditing.
     candidates=[]; texts={}
     for path, idx, obj in iter_jsonl(paths):
         text=obj.get("text","") or ""; meta=obj.get("meta",{}) or {}
+        if not text.strip():
+            continue
         meta_text=" ".join(flatten_strings(meta)); head=text[:cfg["head_chars"]]
-        score, nh, rel=score_candidate(meta_text,head)
-        if score < cfg["min_candidate_score"]: continue
+        nh, rel=lexical_hits(meta_text, head)
         cid=stable_id(path,idx,meta)
         candidates.append({
-            "candidate_id":cid,"source_file":path,"row_idx":idx,"score":score,
+            "candidate_id":cid,"source_file":path,"row_idx":idx,
             "title":pick_meta(meta,["title","name"]),
             "date_raw":pick_meta(meta,["firstup","publish","date","created"]),
             "retrieval_nonhuman_hits":"|".join(sorted(nh)),
@@ -124,7 +124,7 @@ def main():
         texts[cid]=text
     cdf=pd.DataFrame(candidates)
     cdf.to_csv(out/"candidates.csv",index=False)
-    if cdf.empty: raise SystemExit("No candidates. Lower min_candidate_score or inspect corpus schema.")
+    if cdf.empty: raise SystemExit("No candidate rows were present in the preselected input.")
 
     model=SentenceTransformer(cfg["model"], device=args.device)
     manifest=[]; vecs=[]
