@@ -21,7 +21,7 @@ NONHUMAN_TERMS = [
 ]
 RELATION_TERMS = [
     "恋","恋愛","好き","愛する","愛され","惹かれ","想い","結婚","婚姻","嫁","嫁入り","花嫁","妻","夫","夫婦",
-    "婚約","求婚","伴侶","番","つがい","恋人","恋仲","同居","暮らす","一緒に暮ら","新婚","溺愛","契約婚","生贄","生け贄"
+    "婚約","求婚","伴侶","つがい","恋人","恋仲","同居","暮らす","一緒に暮ら","新婚","溺愛","契約婚","生贄","生け贄"
 ]
 
 
@@ -65,7 +65,6 @@ def chunk_text(text, size, overlap):
 
 
 def subsample_chunks_evenly(chunks, max_chunks):
-    """Keep an approximately uniform set across narrative position for bounded pilots."""
     if not max_chunks or len(chunks) <= max_chunks:
         return chunks
     idx=np.linspace(0, len(chunks)-1, num=max_chunks, dtype=int)
@@ -107,7 +106,6 @@ def main():
     if not paths: raise SystemExit("No input files matched")
     out=Path("results"); out.mkdir(exist_ok=True)
 
-    # Stage 1: high-recall retrieval only. Retrieval labels are NOT features downstream.
     candidates=[]; texts={}
     for path, idx, obj in iter_jsonl(paths):
         text=obj.get("text","") or ""; meta=obj.get("meta",{}) or {}
@@ -128,7 +126,6 @@ def main():
     cdf.to_csv(out/"candidates.csv",index=False)
     if cdf.empty: raise SystemExit("No candidates. Lower min_candidate_score or inspect corpus schema.")
 
-    # Stage 2: chunk + unlabeled embeddings. For the pilot, sample chunks evenly over the work.
     model=SentenceTransformer(cfg["model"], device=args.device)
     manifest=[]; vecs=[]
     max_chunks=cfg.get("max_chunks_per_work",0)
@@ -152,13 +149,15 @@ def main():
     np.save(out/"embeddings.npy",X)
     mdf=pd.DataFrame(manifest); mdf.to_csv(out/"chunk_manifest.csv",index=False)
 
-    # Stage 3: unsupervised structure.
     ncomp=min(cfg["pca_components"], X.shape[1], max(2,X.shape[0]-1))
     Xp=PCA(n_components=ncomp, random_state=cfg["random_state"]).fit_transform(X)
     Xu=umap.UMAP(n_components=2,n_neighbors=min(cfg["umap_neighbors"], max(2, len(X)-1)),
                  min_dist=cfg["umap_min_dist"],metric="cosine",
                  random_state=cfg["random_state"]).fit_transform(Xp)
-    labels=hdbscan.HDBSCAN(min_cluster_size=min(cfg["hdbscan_min_cluster_size"], max(2, len(X)//5))).fit_predict(Xp)
+    labels=hdbscan.HDBSCAN(
+        min_cluster_size=min(cfg["hdbscan_min_cluster_size"], max(2, len(X)//5)),
+        min_samples=cfg.get("hdbscan_min_samples", None)
+    ).fit_predict(Xp)
 
     res=mdf.copy(); res["umap_x"]=Xu[:,0]; res["umap_y"]=Xu[:,1]; res["cluster"]=labels
     res.to_csv(out/"clusters.csv",index=False)
