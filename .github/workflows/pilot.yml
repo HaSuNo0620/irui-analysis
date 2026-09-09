@@ -50,14 +50,14 @@ jobs:
             exit 2
           fi
 
-      - name: Stream pilot candidates
+      - name: Stream analysis candidates
         run: |
           python fetch_hf_candidates.py \
-            --max-rows 20000 \
-            --max-candidates 100 \
+            --max-rows 200000 \
+            --max-candidates 500 \
             --output data/pilot_candidates.jsonl
 
-      - name: Run unsupervised pilot
+      - name: Run unsupervised analysis
         run: |
           python run_all.py \
             --input 'data/pilot_candidates.jsonl' \
