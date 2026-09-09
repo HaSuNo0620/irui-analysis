@@ -13,16 +13,7 @@ import umap
 import hdbscan
 import matplotlib.pyplot as plt
 
-NONHUMAN_TERMS = [
-    "人外","異類","異種族","妖怪","あやかし","もののけ","鬼","妖狐","狐","狸","蛇","龍神","竜神","龍","竜",
-    "神","神様","女神","精霊","妖精","天狗","雪女","吸血鬼","ヴァンパイア","悪魔","魔族","獣人","亜人",
-    "エルフ","人魚","ラミア","ハーピー","フェンリル","アンデッド","ゾンビ","幽霊","死神","宇宙人","異星人",
-    "アンドロイド","ロボット","人工生命","怪物","化け物","モンスター"
-]
-RELATION_TERMS = [
-    "恋","恋愛","好き","愛する","愛され","惹かれ","想い","結婚","婚姻","嫁","嫁入り","花嫁","妻","夫","夫婦",
-    "婚約","求婚","伴侶","つがい","恋人","恋仲","同居","暮らす","一緒に暮ら","新婚","溺愛","契約婚","生贄","生け贄"
-]
+from event_windows import lexical_hits, extract_relation_event_windows, anonymize_proper_nouns
 
 
 def flatten_strings(obj):
@@ -43,30 +34,6 @@ def iter_jsonl(paths):
                 try: obj=json.loads(line)
                 except Exception: continue
                 yield p, idx, obj
-
-
-def lexical_hits(meta_text, head):
-    nh={w for w in NONHUMAN_TERMS if w in meta_text or w in head}
-    rel={w for w in RELATION_TERMS if w in meta_text or w in head}
-    return nh, rel
-
-
-def chunk_text(text, size, overlap):
-    step=size-overlap
-    chunks=[]
-    for st in range(0,len(text),step):
-        en=min(st+size,len(text)); c=text[st:en]
-        if len(c.strip())>=200: chunks.append((st,en,c))
-        if en>=len(text): break
-    return chunks
-
-
-def subsample_chunks_evenly(chunks, max_chunks):
-    if not max_chunks or len(chunks) <= max_chunks:
-        return chunks
-    idx=np.linspace(0, len(chunks)-1, num=max_chunks, dtype=int)
-    idx=np.unique(idx)
-    return [chunks[int(i)] for i in idx]
 
 
 def stable_id(path, idx, meta):
@@ -103,15 +70,13 @@ def main():
     if not paths: raise SystemExit("No input files matched")
     out=Path("results"); out.mkdir(exist_ok=True)
 
-    # The input JSONL is already selected by fetch_hf_candidates.py. Do not apply a second
-    # incompatible retrieval filter here; lexical hits are retained only for auditing.
     candidates=[]; texts={}
     for path, idx, obj in iter_jsonl(paths):
         text=obj.get("text","") or ""; meta=obj.get("meta",{}) or {}
         if not text.strip():
             continue
         meta_text=" ".join(flatten_strings(meta)); head=text[:cfg["head_chars"]]
-        nh, rel=lexical_hits(meta_text, head)
+        nh, rel=lexical_hits(meta_text + "\n" + head)
         cid=stable_id(path,idx,meta)
         candidates.append({
             "candidate_id":cid,"source_file":path,"row_idx":idx,
@@ -128,32 +93,45 @@ def main():
 
     model=SentenceTransformer(cfg["model"], device=args.device)
     manifest=[]; vecs=[]
-    max_chunks=cfg.get("max_chunks_per_work",0)
+    proximity=int(cfg.get("relation_event_proximity",500))
+    window_chars=int(cfg.get("relation_event_window_chars",1200))
+    max_windows=int(cfg.get("max_event_windows_per_work",25))
+    works_with_events=0
+
     for row in candidates:
         cid=row["candidate_id"]; text=texts[cid]
-        chunks=chunk_text(text,cfg["chunk_chars"],cfg["overlap_chars"])
-        chunks=subsample_chunks_evenly(chunks,max_chunks)
-        batch=["トピック: "+c for _,_,c in chunks]
-        if not batch: continue
+        windows=extract_relation_event_windows(
+            text, proximity=proximity, window_chars=window_chars, max_windows=max_windows
+        )
+        if not windows:
+            continue
+        works_with_events += 1
+        normalized=[anonymize_proper_nouns(raw) for _,_,raw in windows]
+        batch=["トピック: "+c for c in normalized]
         emb=model.encode(batch,normalize_embeddings=True,batch_size=16,show_progress_bar=False)
-        for j,((st,en,_),v) in enumerate(zip(chunks,emb)):
+        for j,((st,en,_),v) in enumerate(zip(windows,emb)):
             vecs.append(v.astype(np.float32))
             manifest.append({
                 "candidate_id":cid,"title":row.get("title",""),"date_raw":row.get("date_raw",""),
-                "chunk_idx":j,"start_char":st,"end_char":en,
-                "position":((st+en)/2)/max(len(text),1)
+                "chunk_idx":j,"event_idx":j,"start_char":st,"end_char":en,
+                "position":((st+en)/2)/max(len(text),1),
+                "event_chars":en-st,
             })
     if not vecs:
-        raise SystemExit("No chunks were generated from selected candidates.")
+        raise SystemExit("No relation-event windows were generated from selected candidates.")
+
     X=np.stack(vecs)
     np.save(out/"embeddings.npy",X)
     mdf=pd.DataFrame(manifest); mdf.to_csv(out/"chunk_manifest.csv",index=False)
 
     ncomp=min(cfg["pca_components"], X.shape[1], max(2,X.shape[0]-1))
     Xp=PCA(n_components=ncomp, random_state=cfg["random_state"]).fit_transform(X)
-    Xu=umap.UMAP(n_components=2,n_neighbors=min(cfg["umap_neighbors"], max(2, len(X)-1)),
-                 min_dist=cfg["umap_min_dist"],metric="cosine",
-                 random_state=cfg["random_state"]).fit_transform(Xp)
+    Xu=umap.UMAP(
+        n_components=2,
+        n_neighbors=min(cfg["umap_neighbors"], max(2, len(X)-1)),
+        min_dist=cfg["umap_min_dist"],metric="cosine",
+        random_state=cfg["random_state"]
+    ).fit_transform(Xp)
     labels=hdbscan.HDBSCAN(
         min_cluster_size=min(cfg["hdbscan_min_cluster_size"], max(2, len(X)//5)),
         min_samples=cfg.get("hdbscan_min_samples", None)
@@ -166,11 +144,13 @@ def main():
 
     plt.figure(figsize=(9,7))
     plt.scatter(res.umap_x,res.umap_y,s=6,alpha=.55,c=res.cluster)
-    plt.xlabel("UMAP-1"); plt.ylabel("UMAP-2"); plt.title("Unsupervised semantic map of candidate text chunks")
+    plt.xlabel("UMAP-1"); plt.ylabel("UMAP-2")
+    plt.title("Anonymized relation-event semantic map")
     plt.tight_layout(); plt.savefig(out/"umap.png",dpi=180); plt.close()
 
     print(f"Candidates: {len(cdf)}")
-    print(f"Chunks: {len(res)}")
+    print(f"Works with relation-event windows: {works_with_events}")
+    print(f"Relation-event windows: {len(res)}")
     print(f"Clusters (excluding noise): {len(set(labels)-{-1})}")
     print("Saved to results/")
 
