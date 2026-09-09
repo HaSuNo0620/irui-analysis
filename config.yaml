@@ -4,6 +4,9 @@ overlap_chars: 300
 max_chunks_per_work: 25
 min_candidate_score: 4.0
 head_chars: 8000
+relation_event_proximity: 500
+relation_event_window_chars: 1200
+max_event_windows_per_work: 25
 pca_components: 50
 umap_neighbors: 30
 umap_min_dist: 0.05
