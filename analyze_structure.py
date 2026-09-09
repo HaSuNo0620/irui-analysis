@@ -12,10 +12,13 @@ import yaml
 from janome.tokenizer import Tokenizer
 from sklearn.decomposition import PCA
 
+from event_windows import anonymize_proper_nouns
+
 STOP = {
     "こと","もの","ため","よう","ところ","そう","これ","それ","あれ","ここ","そこ","どこ",
     "私","俺","僕","彼","彼女","自分","人","一つ","二つ","今日","今","時","方","何",
     "する","いる","ある","なる","れる","られる","いう","言う","思う","見る","来る","行く",
+    "PROPER",
 }
 
 
@@ -43,7 +46,7 @@ def tokenize(text, tokenizer):
 
 def main():
     ap=argparse.ArgumentParser()
-    ap.add_argument("--input", required=True, help="pilot JSONL used by run_all.py")
+    ap.add_argument("--input", required=True, help="candidate JSONL used by run_all.py")
     ap.add_argument("--config", default="config.yaml")
     ap.add_argument("--results", default="results")
     args=ap.parse_args()
@@ -54,7 +57,6 @@ def main():
     mdf=pd.read_csv(out/"chunk_manifest.csv")
     cdf=pd.read_csv(out/"candidates.csv")
 
-    # Recluster at the explicitly selected interpretation working point.
     ncomp=min(cfg["pca_components"], X.shape[1], max(2, X.shape[0]-1))
     Xp=PCA(n_components=ncomp, random_state=cfg["random_state"]).fit_transform(X)
     labels=hdbscan.HDBSCAN(
@@ -66,7 +68,6 @@ def main():
     res["cluster_interpret"]=labels
     res.to_csv(out/"clusters_interpret.csv", index=False)
 
-    # Cluster summary with cross-work coverage.
     rows=[]
     for k,g in res.groupby("cluster_interpret"):
         rows.append({
@@ -78,7 +79,6 @@ def main():
         })
     pd.DataFrame(rows).sort_values("n_chunks", ascending=False).to_csv(out/"cluster_interpret_summary.csv", index=False)
 
-    # Representative chunks: nearest to PCA-space centroid. No source text is exported.
     reps=[]
     nrep=int(cfg.get("representatives_per_cluster",5))
     for k in sorted(set(labels)):
@@ -96,14 +96,12 @@ def main():
             })
     pd.DataFrame(reps).to_csv(out/"cluster_representatives.csv", index=False)
 
-    # Work-level occupancy p_i(k), including noise as a diagnostic state.
     occ=(res.groupby(["candidate_id","cluster_interpret"]).size().rename("n_chunks").reset_index())
     totals=res.groupby("candidate_id").size().rename("n_total").reset_index()
     occ=occ.merge(totals,on="candidate_id")
     occ["occupancy"]=occ.n_chunks/occ.n_total
     occ.to_csv(out/"work_cluster_occupancy.csv", index=False)
 
-    # Position profile p(k | normalized narrative bin).
     nb=int(cfg.get("position_bins",10))
     res["position_bin"]=np.minimum((res.position.clip(0,0.999999)*nb).astype(int), nb-1)
     prof=(res.groupby(["position_bin","cluster_interpret"]).size().rename("n_chunks").reset_index())
@@ -112,7 +110,6 @@ def main():
     prof["p_cluster_given_position"]=prof.n_chunks/prof.bin_total
     prof.to_csv(out/"position_cluster_profile.csv", index=False)
 
-    # Ordered transitions within each work.
     trans=Counter(); state_tot=Counter()
     for cid,g in res.sort_values(["candidate_id","position"]).groupby("candidate_id"):
         seq=g.cluster_interpret.astype(int).tolist()
@@ -124,7 +121,9 @@ def main():
                       "probability":n/state_tot[a] if state_tot[a] else 0.0})
     pd.DataFrame(trows).to_csv(out/"cluster_transitions.csv", index=False)
 
-    # Reconstruct selected chunks only in memory for derived lexical statistics.
+    # Reconstruct only the same local event windows and anonymize them again for
+    # lexical interpretation. This prevents names/world-specific terms from returning
+    # through the top-term table after the embedding stage has removed them.
     source=read_jsonl(args.input)
     text_by_cid={}
     for _,r in cdf.iterrows():
@@ -138,8 +137,9 @@ def main():
         k=int(r.cluster_interpret)
         if k < 0: continue
         text=text_by_cid.get(r.candidate_id,"")
-        chunk=text[int(r.start_char):int(r.end_char)]
-        terms=tokenize(chunk,tok)
+        raw=text[int(r.start_char):int(r.end_char)]
+        normalized=anonymize_proper_nouns(raw)
+        terms=tokenize(normalized,tok)
         cluster_counts[k].update(terms)
         totals.update(terms)
 
@@ -152,7 +152,6 @@ def main():
         nk=sum(cnt.values()); bg=totals-cnt; nbg=max(grand-nk,0)
         scored=[]
         for term,n in cnt.items():
-            # Smoothed log-frequency ratio against all other non-noise clusters.
             score=math.log((n+0.5)/(nk+0.5*V)) - math.log((bg[term]+0.5)/(nbg+0.5*V))
             scored.append((score,term,n,bg[term]))
         for rank,(score,term,n,nbgterm) in enumerate(sorted(scored,reverse=True)[:topn],1):
@@ -161,7 +160,7 @@ def main():
     pd.DataFrame(termrows).to_csv(out/"cluster_top_terms.csv", index=False)
 
     print(f"Interpretation clustering: {len(set(labels)-{-1})} clusters; noise={(labels==-1).mean():.3f}")
-    print("Saved derived interpretation and trajectory tables without exporting source text.")
+    print("Saved anonymized relation-event interpretation and trajectory tables.")
 
 if __name__ == "__main__":
     main()
