@@ -51,14 +51,16 @@ jobs:
             exit 2
           fi
 
-      - name: Stream analysis candidates
+      - name: Stream work-level Syosetu711K candidates
         run: |
           python fetch_hf_candidates.py \
-            --max-rows 200000 \
+            --repo botp/RyokoAI_Syosetu711K \
+            --max-rows 150000 \
             --max-candidates 500 \
+            --scan-chars 60000 \
             --output data/pilot_candidates.jsonl
 
-      - name: Run anonymized relation-event analysis
+      - name: Embed full novel bodies
         run: |
           python run_all.py \
             --input 'data/pilot_candidates.jsonl' \
@@ -67,7 +69,7 @@ jobs:
       - name: Diagnose HDBSCAN stability
         run: python diagnose_clusters.py
 
-      - name: Analyze anonymized event meaning and trajectories
+      - name: Analyze work-level semantic structure
         run: |
           python analyze_structure.py \
             --input data/pilot_candidates.jsonl
@@ -80,6 +82,8 @@ jobs:
             echo "commit=${GITHUB_SHA}"
             echo "run_id=${GITHUB_RUN_ID}"
             echo "date=$(date -u +%FT%TZ)"
+            echo "source=botp/RyokoAI_Syosetu711K"
+            echo "sampling_unit=novel"
           } > results/run_manifest.txt
 
       - name: Upload analysis results only
