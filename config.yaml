@@ -7,6 +7,7 @@ head_chars: 8000
 relation_event_proximity: 500
 relation_event_window_chars: 600
 relation_event_max_sentences: 2
+followup_event_max_sentences: 4
 max_event_windows_per_work: 25
 pca_components: 50
 umap_neighbors: 30
