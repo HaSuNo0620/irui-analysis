@@ -7,5 +7,8 @@ head_chars: 8000
 pca_components: 50
 umap_neighbors: 30
 umap_min_dist: 0.05
-hdbscan_min_cluster_size: 20
+hdbscan_min_cluster_size: 8
+hdbscan_min_samples: 2
+hdbscan_diagnostic_min_cluster_sizes: [5, 8, 10, 15, 20]
+hdbscan_diagnostic_min_samples: [1, 2, 3, 5]
 random_state: 42
