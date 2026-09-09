@@ -94,14 +94,19 @@ def main():
     model=SentenceTransformer(cfg["model"], device=args.device)
     manifest=[]; vecs=[]
     proximity=int(cfg.get("relation_event_proximity",500))
-    window_chars=int(cfg.get("relation_event_window_chars",1200))
+    window_chars=int(cfg.get("relation_event_window_chars",600))
     max_windows=int(cfg.get("max_event_windows_per_work",25))
+    max_sentences=int(cfg.get("relation_event_max_sentences",2))
     works_with_events=0
 
     for row in candidates:
         cid=row["candidate_id"]; text=texts[cid]
         windows=extract_relation_event_windows(
-            text, proximity=proximity, window_chars=window_chars, max_windows=max_windows
+            text,
+            proximity=proximity,
+            window_chars=window_chars,
+            max_windows=max_windows,
+            max_sentences=max_sentences,
         )
         if not windows:
             continue
@@ -118,7 +123,7 @@ def main():
                 "event_chars":en-st,
             })
     if not vecs:
-        raise SystemExit("No relation-event windows were generated from selected candidates.")
+        raise SystemExit("No explicit human-nonhuman relationship windows were generated from selected candidates.")
 
     X=np.stack(vecs)
     np.save(out/"embeddings.npy",X)
@@ -145,12 +150,12 @@ def main():
     plt.figure(figsize=(9,7))
     plt.scatter(res.umap_x,res.umap_y,s=6,alpha=.55,c=res.cluster)
     plt.xlabel("UMAP-1"); plt.ylabel("UMAP-2")
-    plt.title("Anonymized relation-event semantic map")
+    plt.title("Anonymized explicit human-nonhuman relation-event map")
     plt.tight_layout(); plt.savefig(out/"umap.png",dpi=180); plt.close()
 
     print(f"Candidates: {len(cdf)}")
-    print(f"Works with relation-event windows: {works_with_events}")
-    print(f"Relation-event windows: {len(res)}")
+    print(f"Works with explicit relation-event windows: {works_with_events}")
+    print(f"Explicit relation-event windows: {len(res)}")
     print(f"Clusters (excluding noise): {len(set(labels)-{-1})}")
     print("Saved to results/")
 
