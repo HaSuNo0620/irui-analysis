@@ -1,0 +1,52 @@
+name: WebNovels-Ja structure audit
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - analysis-pipeline
+    paths:
+      - 'audit_dataset_structure.py'
+      - '.github/workflows/structure-audit.yml'
+      - 'requirements.txt'
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install audit dependencies
+        run: pip install 'datasets>=3.0' 'huggingface-hub>=0.25' 'numpy>=1.26'
+
+      - name: Check Hugging Face token
+        run: |
+          if [ -z "$HF_TOKEN" ]; then
+            echo "HF_TOKEN repository secret is missing."
+            exit 2
+          fi
+
+      - name: Audit dataset structure
+        run: |
+          python audit_dataset_structure.py \
+            --rows 10000 \
+            --output-dir structure_audit
+
+      - name: Upload structure audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: webnovels-ja-structure-audit
+          path: structure_audit/
+          if-no-files-found: warn
+          retention-days: 30
