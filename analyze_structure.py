@@ -13,6 +13,7 @@ from janome.tokenizer import Tokenizer
 from sklearn.decomposition import PCA
 
 from event_windows import anonymize_proper_nouns
+from run_all import novel_body
 
 STOP={
     "こと","もの","ため","よう","ところ","そう","これ","それ","あれ","ここ","そこ","どこ",
@@ -67,6 +68,7 @@ def analyze_variant(name,X,mdf,cdf,source,cfg,out):
         for rank,jj in enumerate(idx[np.argsort(d)[:nrep]],1):
             r=res.iloc[jj]
             reps.append({"cluster":int(k),"rank":rank,"candidate_id":r.candidate_id,
+                         "ncode":getattr(r,"ncode",""),"title":getattr(r,"title",""),
                          "chunk_idx":int(r.chunk_idx),"position":float(r.position),
                          "start_char":int(r.start_char),"end_char":int(r.end_char),
                          "distance_to_centroid":float(np.linalg.norm(Xp[jj]-centroid))})
@@ -95,7 +97,9 @@ def analyze_variant(name,X,mdf,cdf,source,cfg,out):
     text_by_cid={}
     for _,r in cdf.iterrows():
         ri=int(r.row_idx)
-        if 0<=ri<len(source): text_by_cid[r.candidate_id]=source[ri].get("text","") or ""
+        if 0<=ri<len(source):
+            obj=source[ri]
+            text_by_cid[r.candidate_id]=novel_body(obj.get("text","") or "",obj.get("meta",{}) or {})
 
     tok=Tokenizer(); cluster_counts=defaultdict(Counter); totals_terms=Counter()
     for _,r in res.iterrows():
@@ -130,10 +134,9 @@ def main():
     cfg=yaml.safe_load(open(args.config,encoding="utf-8")); out=Path(args.results)
     mdf=pd.read_csv(out/"chunk_manifest.csv"); cdf=pd.read_csv(out/"candidates.csv"); source=read_jsonl(args.input)
     Xraw=np.load(out/"embeddings_raw.npy"); Xanon=np.load(out/"embeddings_anonymized.npy")
-    lab_raw=analyze_variant("raw",Xraw,mdf,cdf,source,cfg,out)
-    lab_anon=analyze_variant("anonymized",Xanon,mdf,cdf,source,cfg,out)
+    analyze_variant("raw",Xraw,mdf,cdf,source,cfg,out)
+    analyze_variant("anonymized",Xanon,mdf,cdf,source,cfg,out)
 
-    # Legacy interpretation files mirror raw so older notebooks remain usable.
     pd.read_csv(out/"clusters_interpret_raw.csv").to_csv(out/"clusters_interpret.csv",index=False)
     pd.read_csv(out/"cluster_interpret_summary_raw.csv").to_csv(out/"cluster_interpret_summary.csv",index=False)
     pd.read_csv(out/"cluster_representatives_raw.csv").to_csv(out/"cluster_representatives.csv",index=False)
@@ -141,6 +144,6 @@ def main():
     pd.read_csv(out/"position_cluster_profile_raw.csv").to_csv(out/"position_cluster_profile.csv",index=False)
     pd.read_csv(out/"cluster_transitions_raw.csv").to_csv(out/"cluster_transitions.csv",index=False)
     pd.read_csv(out/"cluster_top_terms_raw.csv").to_csv(out/"cluster_top_terms.csv",index=False)
-    print("Saved full-text raw and anonymized interpretation/trajectory tables.")
+    print("Saved work-level full-text raw and anonymized interpretation/trajectory tables.")
 
 if __name__=="__main__": main()
