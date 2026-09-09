@@ -10,6 +10,7 @@ on:
       - 'fetch_hf_candidates.py'
       - 'diagnose_clusters.py'
       - 'analyze_structure.py'
+      - 'event_windows.py'
       - 'config.yaml'
       - 'requirements.txt'
       - '.github/workflows/pilot.yml'
@@ -57,7 +58,7 @@ jobs:
             --max-candidates 500 \
             --output data/pilot_candidates.jsonl
 
-      - name: Run unsupervised analysis
+      - name: Run anonymized relation-event analysis
         run: |
           python run_all.py \
             --input 'data/pilot_candidates.jsonl' \
@@ -66,7 +67,7 @@ jobs:
       - name: Diagnose HDBSCAN stability
         run: python diagnose_clusters.py
 
-      - name: Analyze cluster meaning and trajectories
+      - name: Analyze anonymized event meaning and trajectories
         run: |
           python analyze_structure.py \
             --input data/pilot_candidates.jsonl
