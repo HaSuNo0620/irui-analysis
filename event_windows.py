@@ -3,10 +3,15 @@
 
 """Shared preprocessing for cross-species relationship-event analysis.
 
-The retrieval rules define *where to observe*, not a typology. A qualifying local event
-must explicitly contain (1) a nonhuman marker, (2) a human-side marker, and (3) a
-romantic/marital relationship marker within the same or adjacent sentence block.
-Downstream clustering remains unsupervised.
+Two stages are intentionally separated:
+1) strict corpus qualification: explicit human + nonhuman + romantic/marital evidence
+   in one or two adjacent sentences;
+2) broader event collection inside already-qualified works: nonhuman + relationship
+   evidence in a short local sentence block, allowing the human party to be implicit
+   through names/pronouns after the relationship has been established.
+
+The retrieval rules define where to observe, not a typology. Downstream clustering
+remains unsupervised.
 """
 
 import re
@@ -70,10 +75,11 @@ def _sentence_spans(text):
 
 
 def relation_evidence_blocks(text, max_sentences=2):
-    """Find blocks that explicitly mention human, nonhuman, and relationship evidence.
+    """Strict corpus-qualification evidence.
 
-    Blocks comprise one sentence or two adjacent sentences. Human hits overlapping a
-    nonhuman expression (e.g. 女 inside 女神) are ignored.
+    Find one/two-sentence blocks that explicitly mention human, nonhuman, and
+    romantic/marital relationship evidence. Human hits overlapping a nonhuman
+    expression are ignored.
     Returns (start, end, block, nonhuman_hits, human_hits, relation_hits).
     """
     sentences = _sentence_spans(text)
@@ -107,27 +113,20 @@ def has_cross_species_relation_evidence(text, max_sentences=2):
     return bool(relation_evidence_blocks(text, max_sentences=max_sentences))
 
 
-def extract_relation_event_windows(text, proximity=500, window_chars=600, max_windows=25, max_sentences=2):
-    """Return windows centered on explicit human-nonhuman relationship evidence.
-
-    ``proximity`` is retained for API compatibility but no longer drives qualification;
-    sentence-level relational evidence is stricter. Overlapping windows are merged.
-    """
-    events = relation_evidence_blocks(text, max_sentences=max_sentences)
-    if not events:
+def _merge_and_sample_intervals(text, intervals, window_chars=600, max_windows=25):
+    if not intervals:
         return []
-
     half = max(int(window_chars) // 2, 120)
-    intervals = []
-    for st0, en0, *_ in events:
+    expanded = []
+    for st0, en0 in intervals:
         center = (st0 + en0) // 2
         st = max(0, center - half)
         en = min(len(text), center + half)
-        intervals.append((st, en))
+        expanded.append((st, en))
 
-    intervals.sort()
+    expanded.sort()
     merged = []
-    for st, en in intervals:
+    for st, en in expanded:
         if not merged or st > merged[-1][1]:
             merged.append([st, en])
         else:
@@ -139,6 +138,56 @@ def extract_relation_event_windows(text, proximity=500, window_chars=600, max_wi
         seen = set()
         windows = [windows[i] for i in idx if not (i in seen or seen.add(i))]
     return windows
+
+
+def extract_relation_event_windows(text, proximity=500, window_chars=600, max_windows=25, max_sentences=2):
+    """Strict windows centered on explicit human-nonhuman relationship evidence.
+
+    Kept for qualification diagnostics and compatibility. ``proximity`` is retained
+    for API compatibility but does not drive qualification.
+    """
+    events = relation_evidence_blocks(text, max_sentences=max_sentences)
+    return _merge_and_sample_intervals(
+        text, [(x[0], x[1]) for x in events], window_chars=window_chars, max_windows=max_windows
+    )
+
+
+def extract_followup_relation_windows(text, window_chars=600, max_windows=25, max_sentences=4):
+    """Broader event collection for works already qualified by the strict rule.
+
+    Once a work has explicit evidence of a human-nonhuman romantic/marital relation,
+    later scenes often refer to the human party only by name or pronoun. Requiring an
+    explicit generic human marker again would therefore discard most of the trajectory.
+
+    This collector searches the whole work for short blocks (default <=4 adjacent
+    sentences) containing both a nonhuman marker and a relationship marker. It does
+    *not* by itself qualify a work for the corpus; it is only valid downstream of the
+    strict qualification step.
+    """
+    sentences = _sentence_spans(text)
+    intervals = []
+    seen = set()
+    for i in range(len(sentences)):
+        for n in range(1, max_sentences + 1):
+            j = i + n
+            if j > len(sentences):
+                break
+            st = sentences[i][0]
+            en = sentences[j - 1][1]
+            block = text[st:en]
+            if not (_NONHUMAN_RE.search(block) and _RELATION_RE.search(block)):
+                continue
+            # Prefer the shortest evidence block for a given start position.
+            key = (st, en)
+            if key in seen:
+                continue
+            seen.add(key)
+            intervals.append((st, en))
+            break
+
+    return _merge_and_sample_intervals(
+        text, intervals, window_chars=window_chars, max_windows=max_windows
+    )
 
 
 def anonymize_proper_nouns(text):
