@@ -8,6 +8,7 @@ on:
     paths:
       - 'analyze_work_space.py'
       - 'analyze_work_geometry.py'
+      - 'analyze_residual_space.py'
       - '.github/workflows/work-space.yml'
 
 jobs:
@@ -50,6 +51,9 @@ jobs:
       - name: Diagnose continuous work-space geometry
         run: python analyze_work_geometry.py
 
+      - name: Analyze residual semantic spaces
+        run: python analyze_residual_space.py
+
       - name: Write reuse manifest
         if: always()
         run: |
@@ -80,6 +84,9 @@ jobs:
             results/work_knn_connectivity_*.csv
             results/work_mst_edges_*.csv
             results/work_geometry_summary_*.csv
+            results/common_chunk_pca_spectrum_*.csv
+            results/residual_*.csv
+            results/work_mean_embeddings_*_remove*.npy
             results/work_space_run_manifest.txt
           if-no-files-found: warn
           retention-days: 30
