@@ -1,0 +1,74 @@
+name: Work-level semantic space
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - analysis-pipeline
+    paths:
+      - 'analyze_work_space.py'
+      - '.github/workflows/work-space.yml'
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install analysis dependencies
+        run: pip install numpy pandas scipy scikit-learn umap-learn
+
+      - name: Reuse clean run 33 semantic base
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p results
+          gh run download 34430083997 \
+            --repo HaSuNo0620/irui-analysis \
+            --name irui-pilot-results \
+            --dir results
+          test -f results/embeddings_raw.npy
+          test -f results/embeddings_anonymized.npy
+          test -f results/chunk_manifest.csv
+          test -f results/candidates.csv
+
+      - name: Analyze work-level semantic spaces
+        run: python analyze_work_space.py
+
+      - name: Write reuse manifest
+        if: always()
+        run: |
+          {
+            echo "commit=${GITHUB_SHA}"
+            echo "run_id=${GITHUB_RUN_ID}"
+            echo "source_run=34430083997"
+            echo "database_access=false"
+            echo "embedding_recomputed=false"
+          } > results/work_space_run_manifest.txt
+
+      - name: Upload work-space results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: irui-work-space-results
+          path: |
+            results/work_semantic_map_*.csv
+            results/work_mean_embeddings_*.npy
+            results/work_mean_cosine_distance_*.csv
+            results/work_subspace_map_*.csv
+            results/work_subspace_*principal_angle_*.csv
+            results/work_space_raw_vs_anonymized_robustness.csv
+            results/work_space_run_manifest.txt
+          if-no-files-found: warn
+          retention-days: 30
