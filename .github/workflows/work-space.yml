@@ -9,6 +9,7 @@ on:
       - 'analyze_work_space.py'
       - 'analyze_work_geometry.py'
       - 'analyze_residual_space.py'
+      - 'interpret_residual_axes.py'
       - '.github/workflows/work-space.yml'
 
 jobs:
@@ -53,6 +54,11 @@ jobs:
 
       - name: Analyze residual semantic spaces
         run: python analyze_residual_space.py
+
+      - name: Interpret residual axes
+        run: |
+          python interpret_residual_axes.py --variant anonymized --remove 3 --pcs 10 --extremes 10
+          python interpret_residual_axes.py --variant raw --remove 3 --pcs 10 --extremes 10
 
       - name: Write reuse manifest
         if: always()
