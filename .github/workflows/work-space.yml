@@ -7,6 +7,7 @@ on:
       - analysis-pipeline
     paths:
       - 'analyze_work_space.py'
+      - 'analyze_work_geometry.py'
       - '.github/workflows/work-space.yml'
 
 jobs:
@@ -46,6 +47,9 @@ jobs:
       - name: Analyze work-level semantic spaces
         run: python analyze_work_space.py
 
+      - name: Diagnose continuous work-space geometry
+        run: python analyze_work_geometry.py
+
       - name: Write reuse manifest
         if: always()
         run: |
@@ -69,6 +73,13 @@ jobs:
             results/work_subspace_map_*.csv
             results/work_subspace_*principal_angle_*.csv
             results/work_space_raw_vs_anonymized_robustness.csv
+            results/work_pca_spectrum_*.csv
+            results/work_pca_scores_*.csv
+            results/work_pca_quantiles_*.csv
+            results/work_local_distance_*.csv
+            results/work_knn_connectivity_*.csv
+            results/work_mst_edges_*.csv
+            results/work_geometry_summary_*.csv
             results/work_space_run_manifest.txt
           if-no-files-found: warn
           retention-days: 30
