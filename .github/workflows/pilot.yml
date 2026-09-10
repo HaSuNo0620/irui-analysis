@@ -2,19 +2,6 @@ name: Irui pilot analysis
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - analysis-pipeline
-    paths:
-      - 'run_all.py'
-      - 'fetch_hf_candidates.py'
-      - 'diagnose_clusters.py'
-      - 'analyze_structure.py'
-      - 'analyze_work_space.py'
-      - 'event_windows.py'
-      - 'config.yaml'
-      - 'requirements.txt'
-      - '.github/workflows/pilot.yml'
 
 jobs:
   pilot:
