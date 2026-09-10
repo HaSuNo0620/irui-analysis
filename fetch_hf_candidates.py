@@ -9,8 +9,8 @@ viewer/schema can disagree across rows; raw JSONL files are streamed directly
 through Hugging Face's filesystem interface.
 
 The human/nonhuman romantic-or-marital evidence is used ONLY to decide corpus
-membership. Downstream semantic analysis uses the selected work's full novel
-text.
+membership. Explicit secondary/fan works are excluded BEFORE qualification.
+Downstream semantic analysis uses the selected work's full novel text.
 """
 
 import argparse
@@ -22,6 +22,31 @@ from pathlib import Path
 from huggingface_hub import HfFileSystem
 
 from event_windows import relation_evidence_blocks
+
+
+def flatten_text_values(obj):
+    """Yield scalar metadata values as strings without imposing genre semantics."""
+    if isinstance(obj, dict):
+        for value in obj.values():
+            yield from flatten_text_values(value)
+    elif isinstance(obj, (list, tuple, set)):
+        for value in obj:
+            yield from flatten_text_values(value)
+    elif obj is not None:
+        yield str(obj)
+
+
+def is_explicit_secondary_work(meta):
+    """High-precision exclusion: only metadata explicitly marked 二次創作.
+
+    We intentionally do not infer secondary status from genre/fandom codes or
+    named franchises, so corpus membership is not altered by speculative rules.
+    """
+    if not isinstance(meta, dict):
+        return False
+    keywords = meta.get("keywords", [])
+    values = list(flatten_text_values(keywords))
+    return any("二次創作" in value for value in values)
 
 
 def main():
@@ -54,6 +79,7 @@ def main():
     evidence_blocks_total = 0
     bad_rows = 0
     missing_ncode = 0
+    excluded_secondary = 0
 
     stop = False
     for shard in files:
@@ -82,6 +108,12 @@ def main():
                     missing_ncode += 1
                     continue
 
+                # Sampling restriction only: remove works explicitly labelled as
+                # secondary creations before any human/nonhuman relation test.
+                if is_explicit_secondary_work(meta):
+                    excluded_secondary += 1
+                    continue
+
                 evidence = relation_evidence_blocks(
                     text[:args.scan_chars], max_sentences=args.max_sentences
                 )
@@ -90,8 +122,6 @@ def main():
 
                 qualifying_rows += 1
                 evidence_blocks_total += len(evidence)
-                # Preserve the whole work and full metadata. N-code makes the work
-                # identity explicit and stable across all downstream stages.
                 item = {"text": text, "meta": meta}
                 if len(reservoir) < args.max_candidates:
                     reservoir.append(item)
@@ -109,23 +139,31 @@ def main():
             f.write(json.dumps(item, ensure_ascii=False) + "\n")
 
     unique_ncodes = len({str(x.get("meta", {}).get("id", "")).upper() for x in reservoir})
+    selected_secondary = sum(is_explicit_secondary_work(x.get("meta", {})) for x in reservoir)
+
     print(f"source_repo={args.repo}")
     print("sampling_unit=novel")
     print("work_id=meta.id_ncode")
     print(f"shards_available={len(files)}")
     print(f"work_rows_scanned={rows_scanned}")
+    print(f"excluded_explicit_secondary_works={excluded_secondary}")
     print(f"qualifying_works={qualifying_rows}")
     print(f"evidence_blocks_total={evidence_blocks_total}")
     print(f"selected_works={len(reservoir)}")
     print(f"unique_selected_ncodes={unique_ncodes}")
+    print(f"selected_explicit_secondary_works={selected_secondary}")
     print(f"bad_rows={bad_rows}")
     print(f"missing_ncode={missing_ncode}")
+    print("corpus_restriction=exclude_explicit_secondary_creation_keyword")
     print("qualification=explicit_human_nonhuman_relationship")
     print(f"membership_scan_chars={args.scan_chars}")
     print(f"max_sentences={args.max_sentences}")
     print("sampling=reservoir_over_scanned_works")
     print(f"seed={args.seed}")
     print(f"output={out}")
+
+    if selected_secondary:
+        raise SystemExit("Invariant failed: explicit secondary works remained in selected corpus")
 
 
 if __name__ == "__main__":
