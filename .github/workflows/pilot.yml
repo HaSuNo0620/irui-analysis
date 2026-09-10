@@ -10,6 +10,7 @@ on:
       - 'fetch_hf_candidates.py'
       - 'diagnose_clusters.py'
       - 'analyze_structure.py'
+      - 'analyze_work_space.py'
       - 'event_windows.py'
       - 'config.yaml'
       - 'requirements.txt'
@@ -38,6 +39,25 @@ jobs:
           path: ~/.cache/huggingface
           key: hf-${{ runner.os }}-ruri-v3-130m
 
+      - name: Restore selected corpus cache
+        id: corpus-cache
+        uses: actions/cache@v4
+        with:
+          path: data/pilot_candidates.jsonl
+          key: irui-corpus-syosetu711k-v2-150k-500-scan60k-seed42-secondary-excluded
+
+      - name: Restore semantic embedding cache
+        id: semantic-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            results/candidates.csv
+            results/chunk_manifest.csv
+            results/embeddings.npy
+            results/embeddings_raw.npy
+            results/embeddings_anonymized.npy
+          key: irui-semantic-${{ runner.os }}-syosetu-v2-ruri130m-${{ hashFiles('run_all.py', 'event_windows.py', 'config.yaml') }}
+
       - name: Install CPU PyTorch
         run: pip install torch --index-url https://download.pytorch.org/whl/cpu
 
@@ -45,6 +65,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Check Hugging Face token
+        if: steps.corpus-cache.outputs.cache-hit != 'true' || steps.semantic-cache.outputs.cache-hit != 'true'
         run: |
           if [ -z "$HF_TOKEN" ]; then
             echo "HF_TOKEN repository secret is missing."
@@ -52,6 +73,7 @@ jobs:
           fi
 
       - name: Stream work-level Syosetu711K candidates
+        if: steps.corpus-cache.outputs.cache-hit != 'true'
         run: |
           python fetch_hf_candidates.py \
             --repo botp/RyokoAI_Syosetu711K \
@@ -61,6 +83,7 @@ jobs:
             --output data/pilot_candidates.jsonl
 
       - name: Embed full novel bodies
+        if: steps.semantic-cache.outputs.cache-hit != 'true'
         run: |
           python run_all.py \
             --input 'data/pilot_candidates.jsonl' \
@@ -69,10 +92,13 @@ jobs:
       - name: Diagnose HDBSCAN stability
         run: python diagnose_clusters.py
 
-      - name: Analyze work-level semantic structure
+      - name: Analyze chunk-level semantic structure
         run: |
           python analyze_structure.py \
             --input data/pilot_candidates.jsonl
+
+      - name: Analyze work-level semantic spaces
+        run: python analyze_work_space.py
 
       - name: Write run manifest
         if: always()
@@ -84,6 +110,8 @@ jobs:
             echo "date=$(date -u +%FT%TZ)"
             echo "source=botp/RyokoAI_Syosetu711K"
             echo "sampling_unit=novel"
+            echo "corpus_cache_hit=${{ steps.corpus-cache.outputs.cache-hit }}"
+            echo "semantic_cache_hit=${{ steps.semantic-cache.outputs.cache-hit }}"
           } > results/run_manifest.txt
 
       - name: Upload analysis results only
