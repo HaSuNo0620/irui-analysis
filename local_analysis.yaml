@@ -1,0 +1,28 @@
+# Lightweight local downstream-analysis configuration.
+# This file assumes cached embeddings already exist in results/.
+
+paths:
+  results_dir: results
+
+stages:
+  work_space: true
+  geometry: true
+  residual: true
+  interpret_axes: true
+
+residual:
+  primary_remove_common_pcs: 3
+  sensitivity_remove_common_pcs: [0, 1, 2, 3, 5, 10]
+  pcs_to_interpret: 10
+  extreme_works_per_side: 10
+  variants: [raw, anonymized]
+
+runtime:
+  fail_on_missing_cache: true
+  write_summary_json: true
+
+required_cache_files:
+  - candidates.csv
+  - chunk_manifest.csv
+  - embeddings_raw.npy
+  - embeddings_anonymized.npy
