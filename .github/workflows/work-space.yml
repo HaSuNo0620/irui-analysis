@@ -2,15 +2,6 @@ name: Work-level semantic space
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - analysis-pipeline
-    paths:
-      - 'analyze_work_space.py'
-      - 'analyze_work_geometry.py'
-      - 'analyze_residual_space.py'
-      - 'interpret_residual_axes.py'
-      - '.github/workflows/work-space.yml'
 
 jobs:
   analyze:
@@ -57,8 +48,8 @@ jobs:
 
       - name: Interpret residual axes
         run: |
-          python interpret_residual_axes.py --variant anonymized --remove 3 --pcs 10 --extremes 10
-          python interpret_residual_axes.py --variant raw --remove 3 --pcs 10 --extremes 10
+          python interpret_residual_axes.py --remove 3 --pcs 10 --extremes 10 --variant raw
+          python interpret_residual_axes.py --remove 3 --pcs 10 --extremes 10 --variant anonymized
 
       - name: Write reuse manifest
         if: always()
